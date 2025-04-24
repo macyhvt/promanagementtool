@@ -1,0 +1,111 @@
+/* theme.css */
+
+/* Apply styles only when the body has the 'dark-theme' class */
+body.dark-theme {
+    background-color: #1f1f1f; /* Dark background */
+    color: #e0e0e0;       /* Lighter text */
+}
+
+body.dark-theme .container {
+    background-color: #333333; /* Darker container background */
+    box-shadow: 0 2px 10px rgba(255, 255, 255, 0.08); /* Lighter shadow */
+    border: 1px solid #444; /* Subtle border */
+}
+
+body.dark-theme h1,
+body.dark-theme h2,
+body.dark-theme h3,
+body.dark-theme h4 {
+    color: #ffffff; /* White headings */
+}
+
+body.dark-theme label {
+    color: #cccccc; /* Lighter label text */
+}
+
+body.dark-theme input[type="text"],
+body.dark-theme input[type="email"],
+body.dark-theme input[type="password"],
+body.dark-theme select {
+    background-color: #444444; /* Dark input background */
+    border-color: #666666;     /* Lighter border */
+    color: #e0e0e0;          /* Light input text */
+}
+/* Placeholder text color */
+body.dark-theme input::placeholder { color: #888; opacity: 1; }
+body.dark-theme :-ms-input-placeholder { color: #888; }
+body.dark-theme ::-ms-input-placeholder { color: #888; }
+
+
+body.dark-theme table {
+    /* Optional: Add specific table styles if needed */
+}
+
+body.dark-theme th {
+    background-color: #404040; /* Darker table header */
+    border-color: #555555;
+}
+
+body.dark-theme td {
+    border-color: #555555;
+}
+
+body.dark-theme tr:nth-child(even) {
+    background-color: #3a3a3a; /* Slightly different dark row */
+}
+body.dark-theme tr:hover {
+    background-color: #484848; /* Dark hover */
+}
+
+body.dark-theme .message.error {
+    background-color: #5a3d3d;
+    color: #f2aaaa;
+    border-color: #7a5d5d;
+}
+
+body.dark-theme .message.success {
+    background-color: #3c5a3d;
+    color: #a7f2a9;
+    border-color: #5d7a5d;
+}
+
+body.dark-theme a {
+    color: #66b3ff; /* Brighter blue links */
+}
+
+body.dark-theme a:hover {
+    color: #99ccff;
+}
+
+/* Adjust button colors for better contrast */
+body.dark-theme .button-like { background-color: #005ba1; border: 1px solid #004b8d; }
+body.dark-theme .button-like:hover { background-color: #0077cc; }
+
+body.dark-theme button, body.dark-theme input[type="submit"] { background-color: #3d8b3d; border: 1px solid #2d6b2d;}
+body.dark-theme button:hover, body.dark-theme input[type="submit"]:hover { background-color: #4caf50; }
+
+body.dark-theme .logout-link { background-color: #b8302c; border: 1px solid #98201c; }
+body.dark-theme .logout-link:hover { background-color: #d9534f; }
+
+body.dark-theme .action-links a.edit { color: #77dd77; }
+body.dark-theme .action-links a.deactivate { color: #ffd700; }
+body.dark-theme .action-links a.activate { color: #66b3ff; }
+
+body.dark-theme hr {
+    border-top: 1px solid #444;
+}
+
+body.dark-theme .dashboard-info {
+    background-color: #3a3a3a;
+    border-color: #555;
+}
+body.dark-theme .section-title {
+    border-bottom-color: #555;
+}
+
+/* Preferences page specific */
+body.dark-theme .preference-section {
+    border-top: 1px solid #444;
+    margin-top: 25px;
+    padding-top: 15px;
+}
