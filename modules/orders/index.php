@@ -559,7 +559,7 @@ foreach ($c_orders as $c_order) {
                                     </tr>
                                     <?php if (isset($c_orders_by_parent[$order['orderID']])): ?>
                                         <?php foreach ($c_orders_by_parent[$order['orderID']] as $c_order): ?>
-                                            <tr>
+                                            <tr style="background-color: #e98929;">
                                                 <td style="padding-left: 20px;" data-column="id">&mdash; <?php echo htmlspecialchars($c_order['orderID']); ?></td>
                                                 <td data-column="type"><?php echo htmlspecialchars($c_order['order_type_name']); ?></td>
                                                 <td data-column="order_no"><?php echo htmlspecialchars($c_order['framework_order_no']); ?></td>
