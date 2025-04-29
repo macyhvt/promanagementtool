@@ -9,7 +9,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 // --- Pagination Settings ---
-$records_per_page = 5;
+$records_per_page = 10;
 $current_page = isset($_GET['page']) && is_numeric($_GET['page']) ? (int)$_GET['page'] : 1;
 if ($current_page < 1) {
     $current_page = 1;
@@ -31,9 +31,9 @@ if ($current_page > $total_pages && $total_pages > 0) {
 // --- Calculate Offset ---
 $offset = ($current_page - 1) * $records_per_page;
 
-// --- Fetch Orders for the Current Page ---
+// --- Fetch Orders for the Current Page with Parent-Child Relationship ---
 $sql = "
-    SELECT o.*,
+    SELECT o.*, 
            a.customer_article_no as article_customer_article_no,
            CASE
                WHEN o.order_type = 'F' THEN 'F'
@@ -46,19 +46,48 @@ $sql = "
            END as status_name
     FROM orders_initial o
     LEFT JOIN articles a ON o.system_article_no = a.system_article_no
-    WHERE o.is_active = 1
-    ORDER BY o.orderID DESC
-    LIMIT :limit OFFSET :offset
+    WHERE o.is_active = 1 
+    AND (o.order_type IN ('F', 'N') OR (o.order_type = 'C' AND o.parent_order_id IS NULL))
+    ORDER BY COALESCE(o.parent_order_id, o.orderID), o.order_type, o.orderID
 ";
 
 $stmt = $pdo->prepare($sql);
-// Bind parameters securely, ensuring LIMIT is treated as an integer
-$stmt->bindValue(':limit', $records_per_page, PDO::PARAM_INT);
-$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
 $stmt->execute();
 $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Fetch all Type C orders separately to be displayed under their parent F orders
+$sql_c_orders = "
+    SELECT o.*, 
+           a.customer_article_no as article_customer_article_no,
+           CASE
+               WHEN o.order_type = 'C' THEN 'C'
+           END as order_type_name,
+           CASE
+               WHEN o.is_active = 1 THEN 'Active'
+               WHEN o.is_active = 0 THEN 'Inactive'
+           END as status_name
+    FROM orders_initial o
+    LEFT JOIN articles a ON o.system_article_no = a.system_article_no
+    WHERE o.is_active = 1 
+    AND o.order_type = 'C'
+    AND o.parent_order_id IS NOT NULL
+    ORDER BY o.orderID
+";
+
+$stmt_c = $pdo->prepare($sql_c_orders);
+$stmt_c->execute();
+$c_orders = $stmt_c->fetchAll(PDO::FETCH_ASSOC);
+
+// Create a lookup array for Type C orders by parent_order_id
+$c_orders_by_parent = [];
+foreach ($c_orders as $c_order) {
+    if (!isset($c_orders_by_parent[$c_order['parent_order_id']])) {
+        $c_orders_by_parent[$c_order['parent_order_id']] = [];
+    }
+    $c_orders_by_parent[$c_order['parent_order_id']][] = $c_order;
+}
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -347,58 +376,39 @@ $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </style>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            function getColumnName(cell) {
-                const headerRow = cell.closest('table').querySelector('thead tr');
-                const cellIndex = Array.from(cell.parentElement.children).indexOf(cell);
-                return headerRow.children[cellIndex].textContent.toLowerCase().replace(/\s+/g, '_');
-            }
-
-            // Make cells editable
             const editableCells = document.querySelectorAll('td:not(.action-links)');
-            let saveTimeout;
             let currentCell = null;
 
             editableCells.forEach(cell => {
-                const columnName = getColumnName(cell);
-                // Skip customer_article_no and system_article_no columns
-                if (columnName === 'customer_article' || columnName === 'system_article') {
-                    return;
-                }
-                
                 cell.classList.add('editable');
-                
+
                 cell.addEventListener('dblclick', function() {
                     if (currentCell) {
                         saveCell(currentCell);
                     }
-                    
+
                     const originalValue = this.textContent.trim();
                     const input = document.createElement('input');
                     input.value = originalValue;
                     input.className = 'edit-input';
-                    
+
                     this.innerHTML = '';
                     this.appendChild(input);
                     this.classList.add('editing');
                     input.focus();
-                    
+
                     currentCell = this;
-                    
-                    // Handle input events
-                    input.addEventListener('input', function() {
-                        clearTimeout(saveTimeout);
-                    });
-                    
+
                     input.addEventListener('blur', function() {
-                        saveCell(this.parentElement);
+                        saveCell(cell);
                     });
-                    
+
                     input.addEventListener('keydown', function(e) {
                         if (e.key === 'Enter') {
-                            saveCell(this.parentElement);
+                            saveCell(cell);
                         } else if (e.key === 'Escape') {
-                            this.parentElement.textContent = originalValue;
-                            this.parentElement.classList.remove('editing');
+                            cell.textContent = originalValue;
+                            cell.classList.remove('editing');
                             currentCell = null;
                         }
                     });
@@ -407,16 +417,15 @@ $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
             function saveCell(cell) {
                 if (!cell.classList.contains('editing')) return;
-                
+
                 const input = cell.querySelector('input');
                 const newValue = input.value.trim();
                 const orderId = cell.closest('tr').querySelector('td:first-child').textContent;
-                const columnName = getColumnName(cell);
-                
+                const columnName = cell.getAttribute('data-column');
+
                 cell.classList.remove('editing');
                 cell.classList.add('saving');
-                
-                // Send update to server
+
                 fetch('actions.php?action=update_cell', {
                     method: 'POST',
                     headers: {
@@ -430,22 +439,20 @@ $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
                         cell.textContent = newValue;
                         cell.classList.remove('saving');
                     } else {
+                        cell.textContent = input.value;
                         cell.classList.remove('saving');
                         cell.classList.add('error');
-                        setTimeout(() => {
-                            cell.classList.remove('error');
-                        }, 2000);
+                        setTimeout(() => cell.classList.remove('error'), 2000);
                     }
                 })
                 .catch(error => {
                     console.error('Error:', error);
+                    cell.textContent = input.value;
                     cell.classList.remove('saving');
                     cell.classList.add('error');
-                    setTimeout(() => {
-                        cell.classList.remove('error');
-                    }, 2000);
+                    setTimeout(() => cell.classList.remove('error'), 2000);
                 });
-                
+
                 currentCell = null;
             }
         });
@@ -527,58 +534,85 @@ $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
                             </tr>
                         <?php else: ?>
                             <?php foreach ($orders as $order): ?>
-                                <tr>
-                                    <td><?php echo htmlspecialchars($order['orderID']); ?></td>
-                                    <td><?php echo htmlspecialchars($order['order_type_name']); ?></td>
-                                    <td class="editable" data-column="framework_order_no" data-order-id="<?php echo $order['orderID']; ?>">
-                                        <?php echo htmlspecialchars($order['framework_order_no']); ?>
-                                    </td>
-                                    <td class="editable" data-column="framework_order_position" data-order-id="<?php echo $order['orderID']; ?>">
-                                        <?php echo htmlspecialchars($order['framework_order_position']); ?>
-                                    </td>
-                                    <td class="editable" data-column="project_no" data-order-id="<?php echo $order['orderID']; ?>">
-                                        <?php echo htmlspecialchars($order['project_no']); ?>
-                                    </td>
-                                    <td>
-                                        <?php echo htmlspecialchars($order['article_customer_article_no']); ?>
-                                    </td>
-                                    <td>
-                                        <?php echo htmlspecialchars($order['system_article_no']); ?>
-                                    </td>
-                                    <td class="editable" data-column="framework_quantity" data-order-id="<?php echo $order['orderID']; ?>">
-                                        <?php echo htmlspecialchars($order['framework_quantity']); ?>
-                                    </td>
-                                    <td class="editable" data-column="price_article" data-order-id="<?php echo $order['orderID']; ?>">
-                                        <?php echo htmlspecialchars(number_format((float)$order['price_article'], 2, '.', '')); // Format price ?>
-                                    </td>
-                                    <td class="editable" data-column="request_date" data-order-id="<?php echo $order['orderID']; ?>">
-                                        <?php echo htmlspecialchars($order['request_date']); // Consider formatting date e.g., date('Y-m-d', strtotime($order['request_date'])) ?>
-                                    </td>
-                                    <td>
-                                        <span class="status-<?php echo strtolower($order['status_name']); ?>">
-                                            <?php echo htmlspecialchars($order['status_name']); ?>
-                                        </span>
-                                    </td>
-                                    <td class="action-links">
-                                        <!-- Edit link removed as per original code, relying on inline edit -->
-                                        <?php if ($order['is_active'] == 1): ?>
-                                            <?php //echo $order['order_type'];
-                                            if ($order['order_type'] !== 'F'): ?>
-                                            <a href="actions.php?action=split&id=<?php echo $order['orderID']; ?>" class="split" onclick="return confirm('Are you sure you want to split this order?');" title="Split Order">
-                                                <i class="fas fa-divide"></i> Split
-                                            </a>
-                                            <?php endif; ?>
+                                <?php if ($order['order_type'] === 'F'): ?>
+                                    <tr style="background-color: <?php echo isset($c_orders_by_parent[$order['orderID']]) ? '#027e20' : 'inherit'; ?>;">
+                                        <td data-column="id"><?php echo htmlspecialchars($order['orderID']); ?></td>
+                                        <td data-column="type"><?php echo htmlspecialchars($order['order_type_name']); ?></td>
+                                        <td data-column="order_no"><?php echo htmlspecialchars($order['framework_order_no']); ?></td>
+                                        <td data-column="position"><?php echo htmlspecialchars($order['framework_order_position']); ?></td>
+                                        <td data-column="project_no"><?php echo htmlspecialchars($order['project_no']); ?></td>
+                                        <td data-column="customer_article"><?php echo htmlspecialchars($order['article_customer_article_no']); ?></td>
+                                        <td data-column="system_article"><?php echo htmlspecialchars($order['system_article_no']); ?></td>
+                                        <td data-column="quantity"><?php echo htmlspecialchars($order['framework_quantity']); ?></td>
+                                        <td data-column="price"><?php echo htmlspecialchars(number_format((float)$order['price_article'], 2, '.', '')); ?></td>
+                                        <td data-column="request_date"><?php echo htmlspecialchars($order['request_date']); ?></td>
+                                        <td>
+                                            <span class="status-<?php echo strtolower($order['status_name']); ?>">
+                                                <?php echo htmlspecialchars($order['status_name']); ?>
+                                            </span>
+                                        </td>
+                                        <td class="action-links">
                                             <a href="actions.php?action=deactivate&id=<?php echo $order['orderID']; ?>" class="deactivate" onclick="return confirm('Are you sure you want to deactivate this order?');" title="Deactivate Order">
                                                 <i class="fas fa-toggle-off"></i> Deactivate
                                             </a>
-                                        <?php else: ?>
-                                            <!-- Usually inactive orders aren't shown or have fewer actions -->
-                                             <a href="actions.php?action=activate&id=<?php echo $order['orderID']; ?>" class="activate" onclick="return confirm('Are you sure you want to activate this order?');" title="Activate Order">
-                                                <i class="fas fa-toggle-on"></i> Activate
+                                        </td>
+                                    </tr>
+                                    <?php if (isset($c_orders_by_parent[$order['orderID']])): ?>
+                                        <?php foreach ($c_orders_by_parent[$order['orderID']] as $c_order): ?>
+                                            <tr>
+                                                <td style="padding-left: 20px;" data-column="id">&mdash; <?php echo htmlspecialchars($c_order['orderID']); ?></td>
+                                                <td data-column="type"><?php echo htmlspecialchars($c_order['order_type_name']); ?></td>
+                                                <td data-column="order_no"><?php echo htmlspecialchars($c_order['framework_order_no']); ?></td>
+                                                <td data-column="position"><?php echo htmlspecialchars($c_order['framework_order_position']); ?></td>
+                                                <td data-column="project_no"><?php echo htmlspecialchars($c_order['project_no']); ?></td>
+                                                <td data-column="customer_article"><?php echo htmlspecialchars($c_order['article_customer_article_no']); ?></td>
+                                                <td data-column="system_article"><?php echo htmlspecialchars($c_order['system_article_no']); ?></td>
+                                                <td data-column="quantity"><?php echo htmlspecialchars($c_order['framework_quantity']); ?></td>
+                                                <td data-column="price"><?php echo htmlspecialchars(number_format((float)$c_order['price_article'], 2, '.', '')); ?></td>
+                                                <td data-column="request_date"><?php echo htmlspecialchars($c_order['request_date']); ?></td>
+                                                <td>
+                                                    <span class="status-<?php echo strtolower($c_order['status_name']); ?>">
+                                                        <?php echo htmlspecialchars($c_order['status_name']); ?>
+                                                    </span>
+                                                </td>
+                                                <td class="action-links">
+                                                    <a href="actions.php?action=deactivate&id=<?php echo $c_order['orderID']; ?>" class="deactivate" onclick="return confirm('Are you sure you want to deactivate this order?');" title="Deactivate Order">
+                                                        <i class="fas fa-toggle-off"></i> Deactivate
+                                                    </a>
+                                                    <a href="actions.php?action=split&id=<?php echo $c_order['orderID']; ?>" class="split" onclick="return confirm('Are you sure you want to split this order?');" title="Split Order">
+                                                        <i class="fas fa-code-branch"></i> Split
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                <?php elseif ($order['order_type'] === 'N'): ?>
+                                    <tr>
+                                        <td data-column="id"><?php echo htmlspecialchars($order['orderID']); ?></td>
+                                        <td data-column="type"><?php echo htmlspecialchars($order['order_type_name']); ?></td>
+                                        <td data-column="order_no"><?php echo htmlspecialchars($order['framework_order_no']); ?></td>
+                                        <td data-column="position"><?php echo htmlspecialchars($order['framework_order_position']); ?></td>
+                                        <td data-column="project_no"><?php echo htmlspecialchars($order['project_no']); ?></td>
+                                        <td data-column="customer_article"><?php echo htmlspecialchars($order['article_customer_article_no']); ?></td>
+                                        <td data-column="system_article"><?php echo htmlspecialchars($order['system_article_no']); ?></td>
+                                        <td data-column="quantity"><?php echo htmlspecialchars($order['framework_quantity']); ?></td>
+                                        <td data-column="price"><?php echo htmlspecialchars(number_format((float)$order['price_article'], 2, '.', '')); ?></td>
+                                        <td data-column="request_date"><?php echo htmlspecialchars($order['request_date']); ?></td>
+                                        <td>
+                                            <span class="status-<?php echo strtolower($order['status_name']); ?>">
+                                                <?php echo htmlspecialchars($order['status_name']); ?>
+                                            </span>
+                                        </td>
+                                        <td class="action-links">
+                                            <a href="actions.php?action=deactivate&id=<?php echo $order['orderID']; ?>" class="deactivate" onclick="return confirm('Are you sure you want to deactivate this order?');" title="Deactivate Order">
+                                                <i class="fas fa-toggle-off"></i> Deactivate
                                             </a>
-                                        <?php endif; ?>
-                                    </td>
-                                </tr>
+                                            <a href="actions.php?action=split&id=<?php echo $order['orderID']; ?>" class="split" onclick="return confirm('Are you sure you want to split this order?');" title="Split Order">
+                                                <i class="fas fa-code-branch"></i> Split
+                                            </a>
+                                        </td>
+                                    </tr>
+                                <?php endif; ?>
                             <?php endforeach; ?>
                         <?php endif; ?>
                     </tbody>
@@ -593,10 +627,10 @@ $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <li class="page-item <?php echo ($current_page <= 1) ? 'disabled' : ''; ?>">
                         <?php if ($current_page > 1): ?>
                             <a class="page-link" href="index.php?page=<?php echo $current_page - 1; ?>" aria-label="Previous">
-                                <span aria-hidden="true">«</span> Prev
+                                <span aria-hidden="true">«</span> 
                             </a>
                         <?php else: ?>
-                            <span class="page-link" aria-hidden="true">«</span> Prev
+                            <span class="page-link" aria-hidden="true">«</span> 
                         <?php endif; ?>
                     </li>
 
@@ -643,10 +677,10 @@ $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     <li class="page-item <?php echo ($current_page >= $total_pages) ? 'disabled' : ''; ?>">
                         <?php if ($current_page < $total_pages): ?>
                             <a class="page-link" href="index.php?page=<?php echo $current_page + 1; ?>" aria-label="Next">
-                                Next <span aria-hidden="true">»</span>
+                                 <span aria-hidden="true">»</span>
                             </a>
                         <?php else: ?>
-                            <span class="page-link" aria-hidden="true">Next »</span>
+                            <span class="page-link" aria-hidden="true"> »</span>
                         <?php endif; ?>
                     </li>
                 </ul>
@@ -679,132 +713,6 @@ $orders = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 row.style.display = text.includes(searchText) ? '' : 'none';
             });
         });
-
-        // Inline editing functionality (Keep as is, it works per cell)
-        // document.querySelectorAll('.editable').forEach(cell => {
-        //     cell.addEventListener('dblclick', function handleDoubleClick() {
-        //          // Prevent adding multiple inputs if already editing
-        //         if (this.classList.contains('editing')) {
-        //             return;
-        //         }
-        //         const originalValue = this.textContent.trim();
-        //         const input = document.createElement('input');
-
-        //         // Determine input type based on column (example)
-        //         const column = cell.getAttribute('data-column');
-        //         if (column === 'request_date') {
-        //             input.type = 'date';
-        //              // Format date for input type="date" (YYYY-MM-DD)
-        //              try {
-        //                  const dateObj = new Date(originalValue);
-        //                  if (!isNaN(dateObj)) {
-        //                     input.value = dateObj.toISOString().split('T')[0];
-        //                  } else {
-        //                      input.value = originalValue; // Fallback if parsing fails
-        //                      input.type = 'text'; // Revert to text if date is invalid format
-        //                  }
-        //              } catch (e) {
-        //                  input.value = originalValue; // Fallback
-        //                  input.type = 'text';
-        //              }
-
-        //         } else if (column === 'framework_quantity' || column === 'price_article' || column === 'framework_order_position') {
-        //             input.type = 'number';
-        //             if (column === 'price_article') {
-        //                 input.step = '0.01'; // Allow decimals for price
-        //             }
-        //             input.value = originalValue.replace(/,/g, ''); // Remove commas for number input
-        //         }
-        //          else {
-        //             input.type = 'text';
-        //             input.value = originalValue;
-        //         }
-
-        //         input.className = 'edit-input'; // Add a class for potential specific styling
-
-        //         this.textContent = ''; // Clear the cell
-        //         this.appendChild(input);
-        //         this.classList.add('editing');
-        //         input.focus();
-
-        //         // --- Save logic (using blur for simplicity) ---
-        //         const saveChanges = () => {
-        //              // Ensure the handler runs only once per blur/enter
-        //             input.removeEventListener('blur', saveChanges);
-        //             input.removeEventListener('keydown', handleKeyDown);
-
-        //             const newValue = input.value;
-        //             // Revert if the value hasn't changed or is empty (optional check)
-        //             // if (newValue === originalValue || newValue.trim() === '') {
-        //             //     cell.textContent = originalValue;
-        //             //     cell.classList.remove('editing');
-        //             //     return;
-        //             // }
-
-
-        //             const orderId = cell.getAttribute('data-order-id');
-        //             // const column = cell.getAttribute('data-column'); // Already have column
-
-        //             cell.classList.add('saving');
-        //             cell.classList.remove('editing'); // Remove editing class before fetch
-        //             cell.textContent = 'Saving...'; // Indicate saving
-
-        //             fetch('actions.php', {
-        //                 method: 'POST',
-        //                 headers: {
-        //                     'Content-Type': 'application/x-www-form-urlencoded', // Standard form encoding
-        //                     'X-Requested-With': 'XMLHttpRequest' // Good practice for AJAX
-        //                 },
-        //                 body: `action=update_cell&order_id=${orderId}&column=${column}&value=${encodeURIComponent(newValue)}`
-        //             })
-        //             .then(response => {
-        //                 if (!response.ok) {
-        //                      throw new Error(`HTTP error! status: ${response.status}`);
-        //                 }
-        //                 return response.json();
-        //              })
-        //             .then(data => {
-        //                  cell.classList.remove('saving');
-        //                 if (data.success) {
-        //                      // Update cell content with potentially formatted value from server if needed
-        //                      cell.textContent = data.newValue !== undefined ? data.newValue : newValue;
-        //                       // Optional: Re-format price/date if needed after save
-        //                       if (column === 'price_article' && !isNaN(parseFloat(cell.textContent))) {
-        //                           cell.textContent = parseFloat(cell.textContent).toFixed(2);
-        //                       }
-        //                  } else {
-        //                     console.error("Update failed:", data.message);
-        //                     cell.textContent = originalValue; // Revert on failure
-        //                     cell.classList.add('error');
-        //                     setTimeout(() => cell.classList.remove('error'), 2500);
-        //                 }
-        //             })
-        //             .catch(error => {
-        //                 console.error('Error updating cell:', error);
-        //                 cell.classList.remove('saving');
-        //                 cell.textContent = originalValue; // Revert on fetch error
-        //                 cell.classList.add('error');
-        //                 setTimeout(() => cell.classList.remove('error'), 2500);
-        //             });
-        //         };
-
-        //          // --- Event listeners for input ---
-        //         const handleKeyDown = (e) => {
-        //             if (e.key === 'Enter') {
-        //                 e.preventDefault(); // Prevent form submission if applicable
-        //                 saveChanges();
-        //             } else if (e.key === 'Escape') {
-        //                  input.removeEventListener('blur', saveChanges);
-        //                  input.removeEventListener('keydown', handleKeyDown);
-        //                 cell.textContent = originalValue;
-        //                 cell.classList.remove('editing');
-        //             }
-        //         };
-
-        //         input.addEventListener('blur', saveChanges);
-        //         input.addEventListener('keydown', handleKeyDown);
-        //     });
-        // });
     </script>
 </body>
 </html>

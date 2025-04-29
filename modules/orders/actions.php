@@ -141,6 +141,7 @@ if ($action === 'create' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $data = [
                     'order_type' => $order_type,
+                    'parent_order_id' => $_POST['selected_order_id'], // Save the selected framework order ID as parent_order_id
                     'project_no' => $parent_order['project_no'],
                     'framework_order_no' => $parent_order['framework_order_no'],
                     'framework_order_position' => $parent_order['framework_order_position'],
@@ -403,41 +404,55 @@ elseif ($action === 'delete' && isset($_GET['id'])) {
 elseif ($action === 'update_cell' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
-    $order_id = filter_input(INPUT_POST, 'order_id', FILTER_VALIDATE_INT);
+    // Debug logging
+    error_log("Raw POST data: " . file_get_contents('php://input'));
+    error_log("POST array: " . print_r($_POST, true));
+    
+    $order_id = filter_input(INPUT_POST, 'order_id', FILTER_SANITIZE_NUMBER_INT);
     $column = filter_input(INPUT_POST, 'column', FILTER_SANITIZE_STRING);
     $value = filter_input(INPUT_POST, 'value', FILTER_SANITIZE_STRING);
+
+    // Debug logging
+    error_log("Processed parameters - order_id: $order_id, column: $column, value: $value");
+
+    // Remove any non-numeric characters from order_id (like the dash prefix)
+    $order_id = preg_replace('/[^0-9]/', '', $order_id);
     
-    if (!$order_id || !$column) {
+    // Debug logging
+    error_log("Cleaned order_id: $order_id");
+
+    if (!$order_id || !$column || $value === null) {
+        error_log("Invalid parameters detected - order_id: $order_id, column: $column, value: $value");
         echo json_encode(['success' => false, 'message' => 'Invalid parameters']);
         exit;
     }
-    
-    // Map column names to database fields
+
+    // Map front-end column names to database field names
     $column_mapping = [
         'id' => 'orderID',
         'type' => 'order_type',
-        'project_no' => 'project_no',
         'order_no' => 'framework_order_no',
         'position' => 'framework_order_position',
+        'project_no' => 'project_no',
         'customer_article' => 'customer_article_no',
         'system_article' => 'system_article_no',
         'quantity' => 'framework_quantity',
         'price' => 'price_article',
         'request_date' => 'request_date'
     ];
-    
+
     if (!isset($column_mapping[$column])) {
-        echo json_encode(['success' => false, 'message' => 'Invalid column']);
+        echo json_encode(['success' => false, 'message' => 'Invalid column name']);
         exit;
     }
-    
+
     $db_column = $column_mapping[$column];
-    
+
     try {
         $sql = "UPDATE orders_initial SET $db_column = ? WHERE orderID = ?";
         $stmt = $pdo->prepare($sql);
         $result = $stmt->execute([$value, $order_id]);
-        
+
         if ($result) {
             echo json_encode(['success' => true]);
         } else {
